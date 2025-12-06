@@ -1,47 +1,131 @@
-name: 'Restore Cache'
-description: 'Restore Cache artifacts like dependencies and build outputs to improve workflow execution time'
-author: 'GitHub'
+name: "Restore Nix Store"
+description: "Restore Nix store using GitHub Actions cache to speed up workflows."
+author: "GitHub"
 inputs:
-  path:
-    description: 'A list of files, directories, and wildcard patterns to restore'
+  primary-key:
+    description: |
+      - When a non-empty string, the action uses this key for restoring a cache.
+      - Otherwise, the action fails.
     required: true
-  key:
-    description: 'An explicit key for restoring the cache'
-    required: true
-  restore-keys:
-    description: 'An ordered list of keys to use for restoring stale cache if no cache hit occurred for key. Note `cache-hit` returns false in this case.'
-    required: false
-  enableCrossOsArchive:
-    description: 'An optional boolean when enabled, allows windows runners to restore caches that were saved on other platforms'
-    default: 'false'
-    required: false
-  fail-on-cache-miss:
-    description: 'Fail the workflow if cache entry is not found'
-    default: 'false'
-    required: false
-  lookup-only:
-    description: 'Check if a cache entry exists for the given input(s) (key, restore-keys) without downloading the cache'
-    default: 'false'
-    required: false
-  
-  restore-key-hit:
-    description: "When true, if a cache key matching `restore-keys` exists, it counts as a cache hit. Thus, a job won't save a new cache."
-    default: 'false'
+
+  restore-prefixes-first-match:
+    description: |
+      - When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the `primary-key`, 
+        the action searches in this list for the first prefix
+        for which there exists a cache whose key has this prefix,
+        and the action tries to restore that cache.
+      - Otherwise, this input has no effect.
+    default: ""
+
+  restore-prefixes-all-matches:
+    description: |
+      - When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the `primary-key`,
+        the action tries to restore all caches whose keys have these prefixes.
+        - Tries caches across all refs to make use of caches created 
+          on the current, base, and default branches 
+          (see [docs](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache)).
+      - Otherwise, this input has no effect.
+    default: ""
+
+  skip-restore-on-hit-primary-key:
+    description: |
+      - When `true`, when there's a hit on the `primary-key`, the action doesn't restore the found cache.
+      - Otherwise, the action restores the cache.
+    default: "false"
+
+  fail-on:
+    description: |
+      - Input form: `<key type>.<result>`.
+      - `<key type>` options: `primary-key`, `first-match`.
+      - `<result>` options: `miss`, `not-restored`.
+      - When the input satisfies the input form, when the event described in the input happens, the action fails.
+        - Example:
+          - Input: `primary-key.not-restored`.
+          - Event: a cache could not be restored via the `primary-key`.
+      - Otherwise, this input has no effect.
+    default: ""
+
+  nix:
+    description: |
+      - Can have an effect only when the action runs on a `Linux` or a `macOS` runner.
+      - When `true`, the action can do Nix-specific things.
+      - Otherwise, the action doesn't do them.
+    default: "true"
+
+  save:
+    description: |
+      - When `true`, the action can save a cache with the `primary-key`.
+      - Otherwise, the action can't save a cache.
+    default: "true"
+
+  paths:
+    description: |
+      - When `nix: true`, the action uses `["/nix", "~/.cache/nix", "~root/.cache/nix"]` as default paths, as suggested [here](https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7).
+      - Otherwise, the action uses an empty list as default paths.
+      - When a newline-separated non-empty list of non-empty path patterns (see [`@actions/glob`](https://github.com/actions/toolkit/tree/main/packages/glob) for supported patterns), the action appends it to default paths and uses the resulting list for restoring caches.
+      - Otherwise, the action uses default paths for restoring caches.
+    default: ""
+  paths-macos:
+    description: |
+      - Overrides `paths`.
+      - Can have an effect only when the action runs on a `macOS` runner.
+    default: ""
+  paths-linux:
+    description: |
+      - Overrides `paths`.
+      - Can have an effect only when the action runs on a `Linux` runner.
+    default: ""
+
+  backend:
+    description: |
+      Choose an implementation of the `cache` package.
+      - When `actions`, use the [actions version](https://github.com/actions/toolkit/tree/main/packages/cache) from [here](https://github.com/nix-community/cache-nix-action/tree/actions-toolkit/packages/cache).
+      - When `buildjet`, use the [BuildJet version](https://github.com/BuildJet/toolkit/tree/main/packages/cache-buildjet) from [here](https://github.com/nix-community/cache-nix-action/tree/buildjet-toolkit/packages/cache).
+    default: "actions"
     required: false
 
-  extra-restore-keys:
-    description: 'A newline-separated list of key prefixes used for restoring multiple caches.'
-    default: ''
+  token:
+    description: |
+      - The action uses it to communicate with GitHub API.
+      - If you use a personal access token, it must have the `repo` scope ([link](https://docs.github.com/en/rest/actions/cache?apiVersion=2022-11-28#delete-github-actions-caches-for-a-repository-using-a-cache-key)).
+    default: ${{ github.token }}
 outputs:
-  cache-hit:
-    description: 'A boolean value to indicate an exact match was found for the primary key'
-  cache-primary-key:
-    description: 'A resolved cache key for which cache match was attempted'
-  cache-matched-key:
-    description: 'Key of the cache that was restored, it could either be the primary key on cache-hit or a partial/complete match of one of the restore keys'
+  primary-key:
+    description: |
+      - A string.
+      - The `primary-key`.
+
+  hit:
+    description: |
+      - A boolean string.
+      - `'true'` when `hit-primary-key` is `true` or `hit-first-match` is `true`.
+      - `'false'` otherwise.
+  hit-primary-key:
+    description: |
+      - A boolean string.
+      - `'true'` when there was a hit on the `primary-key`.
+      - `'false'` otherwise.
+  hit-first-match:
+    description: |
+      - A boolean string.
+      - `'true'` when there was a hit on a key matching `restore-prefixes-first-match`.
+      - `'false'` otherwise.
+
+  restored-key:
+    description: |
+      - A string.
+      - The key of a cache restored via the `primary-key` or via the `restore-prefixes-first-match`.
+      - An empty string otherwise.
+
+  restored-keys:
+    description: |
+      - A possibly empty array of strings (JSON).
+      - Keys of restored caches.
+      - Example: `["key1", "key2"]`.
 runs:
-  using: 'node16'
-  main: '../dist/restore-only/index.js'
+  using: "node20"
+  main: "../dist/restore-only/index.js"
+
 branding:
-  icon: 'archive'
-  color: 'gray-dark'
+  icon: "archive"
+  color: "gray-dark"

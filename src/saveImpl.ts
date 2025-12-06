@@ -1,21 +1,29 @@
-import * as cache from "@actions/cache";
 import * as core from "@actions/core";
-import { getOctokit } from "@actions/github";
-import * as github from "@actions/github";
+import * as fs from "fs";
 
 import { Events, Inputs, State } from "./constants";
-import { collectGarbage } from "./gc";
-import { purgeCaches } from "./purge";
-import { type IStateProvider } from "./stateProvider";
-import * as utils from "./utils/actionUtils";
+import * as inputs from "./inputs";
+import {
+    type IStateProvider,
+    NullStateProvider,
+    StateProvider
+} from "./stateProvider";
+import * as utils from "./utils/action";
+import { cache } from "./utils/cacheBackend";
+import { collectGarbage } from "./utils/collectGarbage";
+import { purgeCacheByKey, purgeCaches } from "./utils/purge";
+import { TarCommandModifiers } from "actions/toolkit/packages/cache/src/options";
 
 // Catch and log any unhandled exceptions.  These exceptions can leak out of the uploadChunk method in
 // @actions/toolkit when a failed upload closes the file descriptor causing any in-process reads to
 // throw an uncaught exception.  Instead of failing this action, just warn.
 process.on("uncaughtException", e => utils.logWarning(e.message));
 
-async function saveImpl(stateProvider: IStateProvider): Promise<number | void> {
+export async function saveImpl(
+    stateProvider: IStateProvider
+): Promise<number | void> {
     let cacheId = -1;
+    const time = Date.now();
     try {
         if (!utils.isCacheFeatureAvailable()) {
             return;
@@ -27,89 +35,158 @@ async function saveImpl(stateProvider: IStateProvider): Promise<number | void> {
                     process.env[Events.Key]
                 } is not supported because it's not tied to a branch or tag ref.`
             );
-            return;
         }
 
         // If restore has stored a primary key in state, reuse that
         // Else re-evaluate from inputs
         const primaryKey =
-            stateProvider.getState(State.CachePrimaryKey) ||
-            core.getInput(Inputs.Key);
+            stateProvider.getState(State.CachePrimaryKey) || inputs.primaryKey;
 
-        if (!primaryKey) {
-            utils.logWarning(`Key is not specified.`);
-            return;
+        if (inputs.save) {
+            utils.info(
+                `Trying to save a new cache with the key "${primaryKey}".`
+            );
         }
 
-        const cachePaths = utils.paths;
-        const restoreKeys = utils.getInputAsArray(Inputs.RestoreKeys);
-
-        const enableCrossOsArchive = utils.getInputAsBool(
-            Inputs.EnableCrossOsArchive
-        );
-
-        // If matched restore key is same as primary key, then do not save cache
-        // NO-OP in case of SaveOnly action
-        const restoredKey = await utils.getCacheKey(
-            cachePaths,
-            primaryKey,
-            restoreKeys,
-            true,
-            enableCrossOsArchive
-        );
-
-        const time = Date.now();
-
-        if (utils.isExactKeyMatch(primaryKey, restoredKey)) {
-            core.info(`Cache hit occurred on the primary key ${primaryKey}.`);
-
-            const caches = await purgeCaches(primaryKey, true, time);
-
-            if (caches.map(cache => cache.key).includes(primaryKey)) {
-                core.info(
-                    `The cache with the key ${primaryKey} will be purged. Saving a new cache.`
+        if (inputs.purge) {
+            if (inputs.purgePrimaryKey == "always") {
+                await purgeCacheByKey(
+                    primaryKey,
+                    `Purging the cache with the key "${primaryKey}" because of "${Inputs.PurgePrimaryKey}: always".`
                 );
             } else {
-                core.info(
-                    `The cache with the key ${primaryKey} won't be purged. Not saving a new cache.`
-                );
-
-                await purgeCaches(primaryKey, false, time);
-
-                return;
+                // We try to purge the cache by the primary key
+                // to potentially save a new cache with that key
+                await purgeCaches({
+                    primaryKey,
+                    prefixes: [],
+                    time
+                });
             }
         }
 
-        await collectGarbage();
+        // Save a cache using the primary key
+        if (!inputs.save) {
+            `Not saving a new cache because of "${Inputs.Save}: false"`;
+        } else {
+            utils.info(`Searching for a cache with the key "${primaryKey}".`);
 
-        const token = core.getInput(Inputs.Token, { required: false });
-        const octokit = getOctokit(token);
+            const lookedUpPrimaryKey = await utils.restoreCache({
+                primaryKey,
+                restoreKeys: [],
+                lookupOnly: true
+            });
 
-        octokit.rest.actions.deleteActionsCacheByKey({
-            per_page: 100,
-            owner: github.context.repo.owner,
-            repo: github.context.repo.repo,
-            key: primaryKey
-        });
+            if (utils.isExactKeyMatch(primaryKey, lookedUpPrimaryKey)) {
+                utils.info(
+                    `
+                    Cache hit occurred on the "${Inputs.PrimaryKey}".
+                    Not collecting garbage.
+                    Not saving a new cache.
+                    `
+                );
 
-        cacheId = await cache.saveCache(
-            cachePaths,
-            primaryKey,
-            {
-                uploadChunkSize: utils.getInputAsInt(Inputs.UploadChunkSize)
-            },
-            enableCrossOsArchive
-        );
+                // Since we don't save a cache
+                // it's probably safe to set the value
+                // to something other than -1
+                // so that the warning
+                // in the try block in saveOnlyRun
+                // is not printed
+                cacheId = 0;
+            } else {
+                utils.info(`Found no cache with this key.`);
 
-        if (cacheId != -1) {
-            core.info(`Cache saved with the key ${primaryKey}`);
+                await collectGarbage();
 
-            await purgeCaches(primaryKey, false, time);
+                utils.info(`Saving a new cache with the key "${primaryKey}".`);
+
+                let tarCommandModifiers = new TarCommandModifiers();
+
+                tarCommandModifiers.createArgs =
+                    await utils.prepareExcludeFromFile(false);
+
+                // can throw
+                cacheId = await cache.saveCache(
+                    inputs.paths,
+                    primaryKey,
+                    {
+                        uploadChunkSize: inputs.uploadChunkSize
+                    },
+                    undefined,
+                    tarCommandModifiers
+                );
+
+                utils.info(
+                    cacheId !== -1
+                        ? `Saved the new cache.`
+                        : `Could not save the new cache.`
+                );
+
+                if (core.isDebug()) {
+                    core.debug("\n\nNix store paths:\n\n");
+
+                    fs.readdirSync("/nix/store").forEach(file => {
+                        core.debug(file);
+                    });
+                }
+            }
+        }
+
+        // Purge other caches
+        if (inputs.purge) {
+            await purgeCaches({
+                primaryKey,
+                prefixes: inputs.purgePrefixes,
+                time
+            });
         }
     } catch (error: unknown) {
-        utils.logWarning((error as Error).message);
+        core.setFailed((error as Error).message);
     }
     return cacheId;
 }
 
-export default saveImpl;
+export async function saveOnlyRun(
+    earlyExit?: boolean | undefined
+): Promise<void> {
+    try {
+        const cacheId = await saveImpl(new NullStateProvider());
+        if (cacheId === -1) {
+            core.warning(`Cache save failed.`);
+        }
+    } catch (err) {
+        console.error(err);
+        if (earlyExit) {
+            process.exit(1);
+        }
+    }
+
+    // node will stay alive if any promises are not resolved,
+    // which is a possibility if HTTP requests are dangling
+    // due to retries or timeouts. We know that if we got here
+    // that all promises that we care about have successfully
+    // resolved, so simply exit with success.
+    if (earlyExit) {
+        process.exit(0);
+    }
+}
+
+export async function saveRun(earlyExit?: boolean | undefined): Promise<void> {
+    try {
+        await saveImpl(new StateProvider());
+    } catch (err) {
+        console.error(err);
+        if (earlyExit) {
+            process.exit(1);
+        }
+    }
+
+    // node will stay alive if any promises are not resolved,
+    // which is a possibility if HTTP requests are dangling
+    // due to retries or timeouts. We know that if we got here
+    // that all promises that we care about have successfully
+    // resolved, so simply exit with success.
+    if (earlyExit) {
+        process.exit(0);
+    }
+}

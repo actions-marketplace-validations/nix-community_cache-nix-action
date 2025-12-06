@@ -1,58 +1,122 @@
-name: 'Save a cache'
-description: 'Save Cache artifacts like dependencies and build outputs to improve workflow execution time'
-author: 'GitHub'
+name: "Save Nix Store"
+description: "Save Nix store using GitHub Actions cache to speed up workflows."
+author: "GitHub"
 inputs:
-  path:
-    description: 'A list of files, directories, and wildcard patterns to cache'
+  primary-key:
+    description: |
+      - When a non-empty string, the action uses this key for saving a cache.
+      - Otherwise, the action fails.
     required: true
-  key:
-    description: 'An explicit key for saving the cache'
-    required: true
-  upload-chunk-size:
-    description: 'The chunk size used to split up large files during upload, in bytes'
+
+  nix:
+    description: |
+      - Can have an effect only when the action runs on a `Linux` or a `macOS` runner.
+      - When `true`, the action can do Nix-specific things.
+      - Otherwise, the action doesn't do them.
+    default: "true"
+
+  save:
+    description: |
+      - When `true`, the action can save a cache with the `primary-key`.
+      - Otherwise, the action can't save a cache.
+    default: "true"
+
+  paths:
+    description: |
+      - When `nix: true`, the action uses `["/nix", "~/.cache/nix", "~root/.cache/nix"]` as default paths, as suggested [here](https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7).
+      - Otherwise, the action uses an empty list as default paths.
+      - When a newline-separated non-empty list of non-empty path patterns (see [`@actions/glob`](https://github.com/actions/toolkit/tree/main/packages/glob) for supported patterns), the action appends it to default paths and uses the resulting list for saving caches.
+      - Otherwise, the action uses default paths for saving caches.
+    default: ""
+  paths-macos:
+    description: |
+      - Overrides `paths`.
+      - Can have an effect only when the action runs on a `macOS` runner.
+    default: ""
+  paths-linux:
+    description: |
+      - Overrides `paths`.
+      - Can have an effect only when the action runs on a `Linux` runner.
+    default: ""
+
+  backend:
+    description: |
+      Choose an implementation of the `cache` package.
+      - When `actions`, use the [actions version](https://github.com/actions/toolkit/tree/main/packages/cache) from [here](https://github.com/nix-community/cache-nix-action/tree/actions-toolkit/packages/cache).
+      - When `buildjet`, use the [BuildJet version](https://github.com/BuildJet/toolkit/tree/main/packages/cache-buildjet) from [here](https://github.com/nix-community/cache-nix-action/tree/buildjet-toolkit/packages/cache).
+    default: "actions"
     required: false
-  enableCrossOsArchive:
-    description: 'An optional boolean when enabled, allows windows runners to save caches that can be restored on other platforms'
-    default: 'false'
-    required: false
-  
-  gc-macos:
-    description: 'When `true`, enables on `macOS` runners Nix store garbage collection before saving a cache.'
-    default: 'false'
+
+  gc-max-store-size:
+    description: |
+      - Can have an effect only when `nix: true`, `save: true`.
+      - The input has no effect if "primary-key" hit occurs when starting to save the new cache.
+      - When a non-negative integer number (possibly with a suffix), the action collects garbage (via `nix store gc --max ...`) until the Nix store size (in bytes) is at most this number just before the action tries to save a new cache.
+      - If you specify a suffix, it must be `K` (kibibytes, 2 ^ 10 bytes), `M` (mebibytes, 2 ^ 20 bytes) or `G` (gibibytes, 2 ^ 30 bytes), where `2 ^ N` means `2 to the power N`.
+        Examples: `5G` (same as `5368709120`), `20M` (same as `20971520`).
+      - Otherwise, this input has no effect.
+    default: ""
   gc-max-store-size-macos:
-    description: 'Maximum Nix store size in bytes on `macOS` runners. Requires `gc-macos: true`.'
-  gc-linux:
-    description: 'When `true`, enables on `Linux` runners Nix store garbage collection before saving a cache.'
-    default: 'false'
+    description: |
+      - Overrides `gc-max-store-size`.
+      - Can have an effect only when the action runs on a `macOS` runner.
+    default: ""
   gc-max-store-size-linux:
-    description: 'Maximum Nix store size in bytes on `Linux` runners. Requires `gc-linux: true`.'
-  
+    description: |
+      - Overrides `gc-max-store-size`.
+      - Can have an effect only when the action runs on a `Linux` runner.
+    default: ""
+
   purge:
-    description: 'When `true`, purge old caches before saving a new cache with a `key`.'
-    default: 'false'
-  purge-keys:
-    description: 'A newline-separated list of cache key prefixes used to purge caches. An empty string is equivalent to the `key` input.'
-    required: false
-    default: ''
-  purge-accessed:
-    description: 'When `true`, purge caches by `last accessed` time. Requires `purge: true`.'
-    default: 'false'
-  purge-accessed-max-age:
-    description: 'Purge caches accessed more than this number of seconds ago. Requires `purge-accessed: true`.'
-    default: '604800'
+    description: |
+      - When `true`, the action purges (possibly zero) caches.
+      - The action purges only caches scoped to the current [GITHUB_REF](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables).
+      - Otherwise, this input has no effect.
+    default: "false"
+  purge-primary-key:
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When `always`, the action always purges the cache with the `primary-key`.
+      - When `never`, the action never purges the cache with the `primary-key`.
+      - Otherwise, this input has no effect.
+    default: ""
+  purge-prefixes:
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When a newline-separated non-empty list of non-empty cache key prefixes, the action selects for purging all caches whose keys match some of these prefixes.
+      - Otherwise, this input has no effect.
+    default: ""
+  purge-last-accessed:
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When a non-negative number, the action purges selected caches that were last accessed more than this number of seconds ago relative to the start of the Save step.
+      - Otherwise, this input has no effect.
+    default: ""
   purge-created:
-    description: 'When `true`, purge caches by `created` time. Requires `purge: true`.'
-    default: 'true'
-  purge-created-max-age:
-    description: 'Purge caches created more than this number of seconds ago. Requires `purge-created: true`.'
-    default: '604800'
-  
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When a non-negative number, the action purges selected caches that were created more than this number of seconds ago relative to the start of the Save step.
+      - Otherwise, this input has no effect.
+    default: ""
+
+  upload-chunk-size:
+    # The original default value may be provided here (https://github.com/actions/cache/issues/1292)
+    # 32MB
+    description: |
+      - When a non-negative number, the action uses it as the chunk size (in bytes) to split up large files during upload.
+      - Otherwise, the action uses the default value `33554432` (32MB).
+    default: ""
+
   token:
-    description: 'Used to communicate with GitHub API.'
+    description: |
+      - The action uses it to communicate with GitHub API.
+      - If you use a personal access token, it must have the `repo` scope ([link](https://docs.github.com/en/rest/actions/cache?apiVersion=2022-11-28#delete-github-actions-caches-for-a-repository-using-a-cache-key)).
     default: ${{ github.token }}
+
 runs:
-  using: 'node16'
-  main: '../dist/save-only/index.js'
+  using: "node20"
+  main: "../dist/save-only/index.js"
+
 branding:
-  icon: 'archive'
-  color: 'gray-dark'
+  icon: "archive"
+  color: "gray-dark"

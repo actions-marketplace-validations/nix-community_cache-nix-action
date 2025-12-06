@@ -1,16 +1,22 @@
 import * as core from "@actions/core";
 
 import { Events, Inputs, Outputs, State } from "./constants";
-import { restoreExtraCaches } from "./restoreExtraCaches";
-import { IStateProvider } from "./stateProvider";
-import * as utils from "./utils/actionUtils";
+import * as inputs from "./inputs";
+import {
+    IStateProvider,
+    NullStateProvider,
+    StateProvider
+} from "./stateProvider";
+import * as utils from "./utils/action";
+import * as install from "./utils/install";
+import * as restore from "./utils/restore";
 
-async function restoreImpl(
-    stateProvider: IStateProvider
+export async function restoreImpl(
+    stateProvider: IStateProvider,
+    earlyExit?: boolean | undefined
 ): Promise<string | undefined> {
     try {
         if (!utils.isCacheFeatureAvailable()) {
-            core.setOutput(Outputs.CacheHit, "false");
             return;
         }
 
@@ -21,86 +27,167 @@ async function restoreImpl(
                     process.env[Events.Key]
                 } is not supported because it's not tied to a branch or tag ref.`
             );
-            return;
         }
 
-        const primaryKey = core.getInput(Inputs.Key, { required: true });
-        stateProvider.setState(State.CachePrimaryKey, primaryKey);
+        await install.installSQLite3();
 
-        const restoreKeys = utils.getInputAsArray(Inputs.RestoreKeys);
-        const cachePaths = utils.paths;
-        const enableCrossOsArchive = utils.getInputAsBool(
-            Inputs.EnableCrossOsArchive
-        );
-        const failOnCacheMiss = utils.getInputAsBool(Inputs.FailOnCacheMiss);
-        const lookupOnly = utils.getInputAsBool(Inputs.LookupOnly);
+        let restoredKey: string | undefined;
+        let lookedUpPrimaryKey: string | undefined;
+        const restoredKeys: string[] = [];
 
-        let cacheKey = await utils.getCacheKey(
-            cachePaths,
-            primaryKey,
-            restoreKeys,
-            lookupOnly,
-            enableCrossOsArchive
-        );
+        const errorNot = (message: string) =>
+            new Error(
+                `
+                No cache with the given key ${message}.
+                Exiting as the input "${Inputs.FailOn}" is set.
+                `
+            );
 
-        const restoreKeyHit = utils.getInputAsBool(Inputs.RestoreKeyHit);
+        const errorNotFound = errorNot("was found");
+        const errorNotRestored = errorNot("could be restored");
 
-        const restoreKey = await utils.getCacheKey(
-            cachePaths,
-            primaryKey,
-            restoreKeys,
-            true,
-            enableCrossOsArchive
-        );
+        let hitPrimaryKey = false;
 
-        if (restoreKeyHit) {
-            cacheKey = restoreKey;
-        }
+        {
+            const primaryKey = inputs.primaryKey;
+            stateProvider.setState(State.CachePrimaryKey, primaryKey);
 
-        if (!cacheKey) {
-            if (failOnCacheMiss) {
-                throw new Error(
-                    `Failed to restore cache entry. Exiting as fail-on-cache-miss is set. Input key: ${primaryKey}`
+            utils.info(`Searching for a cache with the key "${primaryKey}".`);
+            lookedUpPrimaryKey = await utils.restoreCache({
+                primaryKey,
+                restoreKeys: [],
+                lookupOnly: true
+            });
+
+            if (!lookedUpPrimaryKey) {
+                if (
+                    inputs.failOn?.keyType == "primary" &&
+                    inputs.failOn?.result == "miss"
+                ) {
+                    throw errorNotFound;
+                } else {
+                    utils.info(
+                        `Could not find a cache with the given "${Inputs.PrimaryKey}" and "${Inputs.Paths}".`
+                    );
+                }
+            } else if (utils.isExactKeyMatch(primaryKey, lookedUpPrimaryKey)) {
+                utils.info(
+                    `Found a cache with the given "${Inputs.PrimaryKey}".`
                 );
+                hitPrimaryKey = true;
+
+                if (!inputs.skipRestoreOnHitPrimaryKey) {
+                    restoredKey = await restore.restoreCache(primaryKey);
+                    if (restoredKey) {
+                        restoredKeys.push(...[restoredKey]);
+                    } else if (
+                        inputs.failOn?.keyType == "primary" &&
+                        inputs.failOn?.result == "not-restored"
+                    ) {
+                        throw errorNotRestored;
+                    }
+                }
             }
-            core.info(
-                `Cache not found for input keys: ${JSON.stringify([
-                    primaryKey,
-                    ...restoreKeys
-                ])}`
-            );
-
-            await restoreExtraCaches(
-                cachePaths,
-                lookupOnly,
-                enableCrossOsArchive
-            );
-
-            return;
         }
+
+        let hitFirstMatch = false;
+
+        if (
+            inputs.restorePrefixesFirstMatch.length > 0 &&
+            // We may have got an unexpected primary key match by prefix.
+            !hitPrimaryKey
+        ) {
+            utils.info(
+                `
+                Searching for a cache using the "${
+                    Inputs.RestorePrefixesFirstMatch
+                }":
+                ${JSON.stringify(inputs.restorePrefixesFirstMatch)}
+                `
+            );
+
+            const lookedUpFirstMatch = await utils.restoreCache({
+                primaryKey:
+                    "dummy-primary-key-9238748923658961076458761340578645781643059823761298348927349233",
+                restoreKeys: inputs.restorePrefixesFirstMatch,
+                lookupOnly: true
+            });
+
+            if (!lookedUpFirstMatch) {
+                if (
+                    inputs.failOn?.keyType == "first-match" &&
+                    inputs.failOn.result == "miss"
+                ) {
+                    throw errorNotFound;
+                } else {
+                    utils.info(`Could not find a cache.`);
+                }
+            } else {
+                utils.info(
+                    `Found a cache using the "${Inputs.RestorePrefixesFirstMatch}".`
+                );
+                hitFirstMatch = true;
+
+                restoredKey = await restore.restoreCache(lookedUpFirstMatch);
+                if (restoredKey) {
+                    restoredKeys.push(...[restoredKey]);
+                } else if (
+                    inputs.failOn?.keyType == "first-match" &&
+                    inputs.failOn?.result == "not-restored"
+                ) {
+                    throw errorNotRestored;
+                }
+            }
+        }
+
+        if (!lookedUpPrimaryKey) {
+            restoredKeys.push(...(await restore.restoreAllMatches()));
+        }
+
+        restoredKey ??= "";
 
         // Store the matched cache key in states
-        stateProvider.setState(State.CacheMatchedKey, cacheKey);
+        stateProvider.setState(State.CacheRestoredKey, restoredKey);
 
-        const isExactKeyMatch =
-            utils.isExactKeyMatch(
-                core.getInput(Inputs.Key, { required: true }),
-                cacheKey
-            ) || restoreKeyHit;
+        core.setOutput(Outputs.HitPrimaryKey, hitPrimaryKey);
+        core.setOutput(Outputs.HitFirstMatch, hitFirstMatch);
+        core.setOutput(Outputs.Hit, hitPrimaryKey || hitFirstMatch);
+        core.setOutput(Outputs.RestoredKey, restoredKey);
+        core.setOutput(Outputs.RestoredKeys, restoredKeys);
 
-        core.setOutput(Outputs.CacheHit, isExactKeyMatch.toString());
-        if (lookupOnly) {
-            core.info(`Cache found and can be restored from key: ${cacheKey}`);
-        } else {
-            core.info(`Cache restored from key: ${cacheKey}`);
-        }
-
-        await restoreExtraCaches(cachePaths, lookupOnly, enableCrossOsArchive);
-
-        return cacheKey;
+        return restoredKey;
     } catch (error: unknown) {
         core.setFailed((error as Error).message);
+        if (earlyExit) {
+            process.exit(1);
+        }
     }
 }
 
-export default restoreImpl;
+async function run(
+    stateProvider: IStateProvider,
+    earlyExit: boolean | undefined
+): Promise<void> {
+    await restoreImpl(stateProvider, earlyExit);
+
+    // node will stay alive if any promises are not resolved,
+    // which is a possibility if HTTP requests are dangling
+    // due to retries or timeouts. We know that if we got here
+    // that all promises that we care about have successfully
+    // resolved, so simply exit with success.
+    if (earlyExit) {
+        process.exit(0);
+    }
+}
+
+export async function restoreOnlyRun(
+    earlyExit?: boolean | undefined
+): Promise<void> {
+    await run(new NullStateProvider(), earlyExit);
+}
+
+export async function restoreRun(
+    earlyExit?: boolean | undefined
+): Promise<void> {
+    await run(new StateProvider(), earlyExit);
+}

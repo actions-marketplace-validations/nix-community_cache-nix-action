@@ -96,3 +96,15 @@ typings/
 .vscode/
 
 .direnv
+
+__pycache__
+
+table.md
+
+tmp
+
+src/templates/merge.ts
+
+/packages
+
+result

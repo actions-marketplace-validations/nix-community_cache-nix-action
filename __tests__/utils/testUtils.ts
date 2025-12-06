@@ -1,4 +1,4 @@
-import { Inputs } from "../constants";
+import { Inputs } from "../../src/constants";
 
 // See: https://github.com/actions/toolkit/blob/master/packages/core/src/core.ts#L67
 function getInputName(name: string): string {
@@ -18,6 +18,7 @@ interface CacheInput {
     lookupOnly?: boolean;
 }
 
+// TODO fix
 export function setInputs(input: CacheInput): void {
     setInput(Inputs.Path, input.path);
     setInput(Inputs.Key, input.key);

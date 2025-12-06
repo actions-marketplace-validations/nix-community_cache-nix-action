@@ -1,73 +1,193 @@
-name: 'Cache Nix store'
-description: 'Cache Nix store using GitHub Actions cache to speed up workflows.'
-author: 'GitHub'
+name: "Restore and save Nix Store"
+description: "Restore and save Nix store using GitHub Actions cache to speed up workflows."
+author: "GitHub"
 inputs:
-  key:
-    description: 'An explicit key for restoring and saving the cache.'
+  primary-key:
+    description: |
+      - When a non-empty string, the action uses this key for restoring and saving a cache.
+      - Otherwise, the action fails.
     required: true
-  restore-keys:
-    description: 'An ordered list of keys to use for restoring stale cache if no cache hit occurred for key. Note `cache-hit` returns false in this case.'
-  upload-chunk-size:
-    description: 'The chunk size used to split up large files during upload, in bytes.'
-  enableCrossOsArchive:
-    description: 'An optional boolean when enabled, allows windows runners to save or restore caches that can be restored or saved respectively on other platforms.'
-    default: 'false'
-  fail-on-cache-miss:
-    description: 'Fail the workflow if cache entry is not found.'
-    default: 'false'
-  lookup-only:
-    description: 'Check if a cache entry exists for the given input(s) (key, restore-keys) without downloading the cache.'
-    default: 'false'
+  
+  restore-prefixes-first-match:
+    description: |
+      - When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the `primary-key`, 
+        the action searches in this list for the first prefix
+        for which there exists a cache whose key has this prefix,
+        and the action tries to restore that cache.
+      - Otherwise, this input has no effect.
+    default: ""
 
-  extra-restore-keys:
-    description: 'A newline-separated list of key prefixes used for restoring multiple caches.'
-    default: ''
+  restore-prefixes-all-matches:
+    description: |
+      - When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the `primary-key`,
+        the action tries to restore all caches whose keys have these prefixes.
+        - Tries caches across all refs to make use of caches created 
+          on the current, base, and default branches 
+          (see [docs](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache)).
+      - Otherwise, this input has no effect.
+    default: ""
 
-  restore-key-hit:
-    description: "When true, if a cache key matching `restore-keys` exists, it counts as a cache hit. Thus, a job won't save a new cache."
-    default: 'false'
+  skip-restore-on-hit-primary-key:
+    description: |
+      - When `true`, when there's a hit on the `primary-key`, the action doesn't restore the found cache.
+      - Otherwise, the action restores the cache.
+    default: "false"
 
-  gc-macos:
-    description: 'When `true`, enables on `macOS` runners Nix store garbage collection before saving a cache.'
-    default: 'false'
+  fail-on:
+    description: |
+      - Input form: `<key type>.<result>`.
+      - `<key type>` options: `primary-key`, `first-match`.
+      - `<result>` options: `miss`, `not-restored`.
+      - When the input satisfies the input form, when the event described in the input happens, the action fails.
+        - Example:
+          - Input: `primary-key.not-restored`.
+          - Event: a cache could not be restored via the `primary-key`.
+      - Otherwise, this input has no effect.
+    default: ""
+
+  nix:
+    description: |
+      - Can have an effect only when the action runs on a `Linux` or a `macOS` runner.
+      - When `true`, the action can do Nix-specific things.
+      - Otherwise, the action doesn't do them.
+    default: "true"
+
+  save:
+    description: |
+      - When `true`, the action can save a cache with the `primary-key`.
+      - Otherwise, the action can't save a cache.
+    default: "true"
+
+  paths:
+    description: |
+      - When `nix: true`, the action uses `["/nix", "~/.cache/nix", "~root/.cache/nix"]` as default paths, as suggested [here](https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7).
+      - Otherwise, the action uses an empty list as default paths.
+      - When a newline-separated non-empty list of non-empty path patterns (see [`@actions/glob`](https://github.com/actions/toolkit/tree/main/packages/glob) for supported patterns), the action appends it to default paths and uses the resulting list for restoring and saving caches.
+      - Otherwise, the action uses default paths for restoring and saving caches.
+    default: ""
+  paths-macos:
+    description: |
+      - Overrides `paths`.
+      - Can have an effect only when the action runs on a `macOS` runner.
+    default: ""
+  paths-linux:
+    description: |
+      - Overrides `paths`.
+      - Can have an effect only when the action runs on a `Linux` runner.
+    default: ""
+  
+  backend:
+    description: |
+      Choose an implementation of the `cache` package.
+      - When `actions`, use the [actions version](https://github.com/actions/toolkit/tree/main/packages/cache) from [here](https://github.com/nix-community/cache-nix-action/tree/actions-toolkit/packages/cache).
+      - When `buildjet`, use the [BuildJet version](https://github.com/BuildJet/toolkit/tree/main/packages/cache-buildjet) from [here](https://github.com/nix-community/cache-nix-action/tree/buildjet-toolkit/packages/cache).
+    default: 'actions'
+    required: false
+
+  gc-max-store-size:
+    description: |
+      - Can have an effect only when `nix: true`, `save: true`.
+      - The input has no effect if "primary-key" hit occurs when starting to save the new cache.
+      - When a non-negative integer number (possibly with a suffix), the action collects garbage (via `nix store gc --max ...`) until the Nix store size (in bytes) is at most this number just before the action tries to save a new cache.
+      - If you specify a suffix, it must be `K` (kibibytes, 2 ^ 10 bytes), `M` (mebibytes, 2 ^ 20 bytes) or `G` (gibibytes, 2 ^ 30 bytes), where `2 ^ N` means `2 to the power N`.
+        Examples: `5G` (same as `5368709120`), `20M` (same as `20971520`).
+      - Otherwise, this input has no effect.
+    default: ""
   gc-max-store-size-macos:
-    description: 'Maximum Nix store size in bytes on `macOS` runners. Requires `gc-macos: true`.'
-  gc-linux:
-    description: 'When `true`, enables on `Linux` runners Nix store garbage collection before saving a cache.'
-    default: 'false'
+    description: |
+      - Overrides `gc-max-store-size`.
+      - Can have an effect only when the action runs on a `macOS` runner.
+    default: ""
   gc-max-store-size-linux:
-    description: 'Maximum Nix store size in bytes on `Linux` runners. Requires `gc-linux: true`.'
-  
+    description: |
+      - Overrides `gc-max-store-size`.
+      - Can have an effect only when the action runs on a `Linux` runner.
+    default: ""
+
   purge:
-    description: 'When `true`, purge old caches before saving a new cache with a `key`.'
-    default: 'false'
-  purge-keys:
-    description: 'A newline-separated list of cache key prefixes used to purge caches. An empty string is equivalent to the `key` input.'
-    default: ''
-  purge-accessed:
-    description: 'When `true`, purge caches by `last accessed` time. Requires `purge: true`.'
-    default: 'false'
-  purge-accessed-max-age:
-    description: 'Purge caches accessed more than this number of seconds ago. Requires `purge-accessed: true`.'
-    default: '604800'
+    description: |
+      - When `true`, the action purges (possibly zero) caches.
+      - The action purges only caches scoped to the current [GITHUB_REF](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables).
+      - Otherwise, this input has no effect.
+    default: "false"
+  purge-primary-key:
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When `always`, the action always purges the cache with the `primary-key`.
+      - When `never`, the action never purges the cache with the `primary-key`.
+      - Otherwise, this input has no effect.
+    default: ""
+  purge-prefixes:
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When a newline-separated non-empty list of non-empty cache key prefixes, the action selects for purging all caches whose keys match some of these prefixes.
+      - Otherwise, this input has no effect.
+    default: ""
+  purge-last-accessed:
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When a non-negative number, the action purges selected caches that were last accessed more than this number of seconds ago relative to the start of the `Post Restore` phase.
+      - Otherwise, this input has no effect.
+    default: ""
   purge-created:
-    description: 'When `true`, purge caches by `created` time. Requires `purge: true`.'
-    default: 'true'
-  purge-created-max-age:
-    description: 'Purge caches created more than this number of seconds ago. Requires `purge-created: true`.'
-    default: '604800'
-  
+    description: |
+      - Can have an effect only when `purge: true`.
+      - When a non-negative number, the action purges selected caches that were created more than this number of seconds ago relative to the start of the `Post Restore` phase.
+      - Otherwise, this input has no effect.
+    default: ""
+
+  upload-chunk-size:
+    # The original default value may be provided here (https://github.com/actions/cache/issues/1292)
+    # 32MB
+    description: |
+      - When a non-negative number, the action uses it as the chunk size (in bytes) to split up large files during upload.
+      - Otherwise, the action uses the default value `33554432` (32MB).
+    default: ""
+
+
   token:
-    description: 'Used to communicate with GitHub API.'
+    description: |
+      - The action uses it to communicate with GitHub API.
+      - If you use a personal access token, it must have the `repo` scope ([link](https://docs.github.com/en/rest/actions/cache?apiVersion=2022-11-28#delete-github-actions-caches-for-a-repository-using-a-cache-key)).
     default: ${{ github.token }}
 outputs:
-  cache-hit:
-    description: 'A boolean value to indicate an exact match was found for the primary key.'
+  primary-key:
+    description: |
+      - A string.
+      - The `primary-key`.
+
+  hit:
+    description: |
+      - A boolean string.
+      - `'true'` when `hit-primary-key` is `true` or `hit-first-match` is `true`.
+      - `'false'` otherwise.
+  hit-primary-key:
+    description: |
+      - A boolean string.
+      - `'true'` when there was a hit on the `primary-key`.
+      - `'false'` otherwise.
+  hit-first-match:
+    description: |
+      - A boolean string.
+      - `'true'` when there was a hit on a key matching `restore-prefixes-first-match`.
+      - `'false'` otherwise.
+
+  restored-key:
+    description: |
+      - A string.
+      - The key of a cache restored via the `primary-key` or via the `restore-prefixes-first-match`.
+      - An empty string otherwise.
+
+  restored-keys:
+    description: |
+      - A possibly empty array of strings (JSON).
+      - Keys of restored caches.
+      - Example: `["key1", "key2"]`.
 runs:
-  using: 'node16'
-  main: 'dist/restore/index.js'
-  post: 'dist/save/index.js'
-  post-if: success()
+  using: "node20"
+  main: "dist/restore/index.js"
+  post: "dist/save/index.js"
+  post-if: "success()"
 branding:
-  icon: 'archive'
-  color: 'gray-dark'
+  icon: "archive"
+  color: "gray-dark"
