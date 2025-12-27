@@ -1,16 +1,12 @@
 # https://github.com/NixOS/nix/issues/6895#issuecomment-2475461113
 {
   pkgs,
-  # flake inputs
-  # their transitive inputs will be included
-  inputs,
-  # flake inputs to exclude
-  # their transitive inputs will be excluded
-  # unless they're transitive inputs of any included inputs
-  inputsExclude ? [ ],
-  # derivations like pkgs.hello
+  # Flake inputs.
+  # Their transitive inputs will be included
+  inputs ? { },
+  # Derivations like 'pkgs.hello'
   derivations ? [ ],
-  # paths like /nix/store/p09fxxwkdj69hk4mgddk4r3nassiryzc-hello-2.12.1
+  # Paths like '/nix/store/p09fxxwkdj69hk4mgddk4r3nassiryzc-hello-2.12.1'
   paths ? [ ],
 }:
 assert builtins.isList derivations;
@@ -22,32 +18,49 @@ let
     filter
     ;
   inherit (pkgs) lib;
+
   getInputs =
     flakes: concatMap (flake: if flake ? inputs then attrValues flake.inputs else [ ]) flakes;
 
-  mkFlakesClosure =
-    flakes: if flakes == [ ] then [ ] else flakes ++ mkFlakesClosure (getInputs flakes);
+  nubBy =
+    eq: l:
+    if l == [ ] then
+      l
+    else
+      let
+        x = builtins.head l;
+      in
+      [ x ] ++ (nubBy eq (filter (y: !(eq x y)) (builtins.tail l)));
 
-  closure = lib.trivial.pipe inputs [
+  uniqueFlakes = nubBy (x: y: x.outPath == y.outPath);
+
+  mkFlakesClosure =
+    flakes': flakes:
+    if flakes == [ ] then
+      uniqueFlakes flakes'
+    else
+      let
+        flakes'' = uniqueFlakes (flakes' ++ flakes);
+      in
+      mkFlakesClosure flakes'' (filter (x: !builtins.elem x flakes'') (getInputs flakes));
+
+  flakesClosure = lib.trivial.pipe inputs [
     attrValues
-    # the current flake will probably change next time
-    # hence, we only save its inputs
-    # if you want to save the flake, put "self" into "derivations"
-    (filter (x: x != inputs.self))
-    # we need to exclude particular inputs
-    # before we collect their transitive inputs
-    (filter (x: !(builtins.elem x inputsExclude)))
-    mkFlakesClosure
+    # The current flake will probably change next time.
+    # Hence, we only save its inputs.
+    # If you want to save the flake, put "self" into "derivations".
+    (filter (x: x != (inputs.self or { })))
+    (mkFlakesClosure [ ])
     lib.unique
-    (filter (x: x != inputs.self))
+    (filter (x: x != (inputs.self or { })))
   ];
 
-  # we don't have much more info
-  # so, we're just printing the paths
+  # We don't have much more info.
+  # Therefore, we're just printing the paths.
   saveFromGC = pkgs.writeScriptBin "save-from-gc" (
     concatStringsSep "\n\n" (
       lib.attrsets.mapAttrsToList (name: value: "${name}\n${concatStringsSep "\n" value}") {
-        inherit closure derivations paths;
+        inherit flakesClosure derivations paths;
       }
     )
   );
@@ -56,7 +69,7 @@ in
   inherit
     getInputs
     mkFlakesClosure
-    closure
+    flakesClosure
     saveFromGC
     ;
 }
