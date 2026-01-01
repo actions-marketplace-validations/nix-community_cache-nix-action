@@ -4,19 +4,19 @@ export enum Inputs {
     RestorePrefixesFirstMatch = "restore-prefixes-first-match", // Input for cache, restore actions
     RestorePrefixesAllMatches = "restore-prefixes-all-matches", // Input for cache, restore actions
 
-    SkipRestoreOnHitPrimaryKey = "skip-restore-on-hit-primary-key", // Input for cache, restore, actions
+    LookupOnly = "lookup-only", // Input for cache, restore actions
 
     FailOn = "fail-on", // Input for cache, restore actions
 
-    Nix = "nix",
+    Nix = "nix", // Input for cache, save, restore actions
 
-    Save = "save",
+    Save = "save", // Input for cache, save actions
 
     Paths = "paths", // Input for cache, save, restore actions
     PathsMacos = "paths-macos", // Input for cache, save, restore actions
     PathsLinux = "paths-linux", // Input for cache, save, restore actions
 
-    GCMaxStoreSize = "gc-max-store-size",
+    GCMaxStoreSize = "gc-max-store-size", // Input for cache, save actions
     GCMaxStoreSizeMacos = "gc-max-store-size-macos", // Input for cache, save actions
     GCMaxStoreSizeLinux = "gc-max-store-size-linux", // Input for cache, save actions
 

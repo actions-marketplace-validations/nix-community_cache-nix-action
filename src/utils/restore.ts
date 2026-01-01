@@ -1,20 +1,32 @@
-import { copyFileSync } from "fs";
-
+import { existsSync } from 'fs';
 import { Inputs } from "../constants";
 import * as inputs from "../inputs";
 import * as utils from "./action";
 import { cacheUtils } from "./cacheBackend";
 import { mergeStoreDatabases } from "./mergeStoreDatabases";
+import { installSQLite3 } from './install';
 
 export async function restoreCache(key: string, ref?: string) {
     const tempDir = await cacheUtils.createTempDirectory();
-    const dbPath = "/nix/var/nix/db/db.sqlite";
-    const dbPath1 = `${tempDir}/old.sqlite`;
-    const dbPath2 = `${tempDir}/new.sqlite`;
-
+    const dbStorePath = "/nix/var/nix/db/db.sqlite";
+    const dbOldPath = `${tempDir}/old.sqlite`;
+    const dbNewPath = `${tempDir}/new.sqlite`;
+    const dbMergedPath = `${tempDir}/merged.sqlite`;
+    
+    const user = "runner";
+    const group = inputs.choose("runner", "staff", "");
+    
+    let copyDb = async (dbPath: string) => {
+        await utils.run(`
+            sudo cp ${dbStorePath} ${dbPath};
+            sudo chown ${user}:${group} ${dbPath}
+        `)
+    }
+    
     if (inputs.nix) {
-        utils.info(`Copying "${dbPath}" to "${dbPath1}".`);
-        copyFileSync(dbPath, dbPath1);
+        utils.info(`Copying "${dbStorePath}" to "${dbOldPath}".`);
+        
+        await copyDb(dbOldPath)
     }
 
     utils.info(
@@ -31,26 +43,33 @@ export async function restoreCache(key: string, ref?: string) {
 
     if (cacheKey) {
         utils.info(`Finished restoring the cache.`);
+        
+        await installSQLite3();
 
         if (inputs.nix) {
-            utils.info(`Copying "${dbPath}" to "${dbPath2}".`);
+            utils.info(`Copying "${dbStorePath}" to "${dbNewPath}".`);
 
-            copyFileSync(dbPath, dbPath2);
+            await copyDb(dbNewPath)
 
-            utils.info(
-                `
-                Merging store databases "${dbPath1}" and "${dbPath2}"
-                into "${dbPath}".
-                `
-            );
-
-            await mergeStoreDatabases(tempDir, dbPath1, dbPath2, dbPath);
-
-            utils.info(`Checking the store database.`);
-
-            await utils.run(`sqlite3 "${dbPath}" 'PRAGMA integrity_check;'`);
+            const mergeScriptPath = `${tempDir}/merge.sql`;
             
-            utils.info(`The store database is consistent.`)
+            await mergeStoreDatabases(
+                mergeScriptPath,
+                dbOldPath,
+                dbNewPath,
+                dbMergedPath,
+                dbStorePath
+            );
+            
+            const nixCachePath = `${process.env.HOME}/.cache/nix`;
+
+            if (existsSync(nixCachePath)) {
+                utils.info(
+                    `Giving write permissions for ${nixCachePath} to the current user.`
+                );
+                
+                await utils.run(`sudo chmod -R u+w ${nixCachePath}`);
+            }
         }
 
         return cacheKey;

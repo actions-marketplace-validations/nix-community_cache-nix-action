@@ -12,9 +12,7 @@ export const restorePrefixesAllMatches = utils.getInputAsArray(
     Inputs.RestorePrefixesAllMatches
 );
 
-export const skipRestoreOnHitPrimaryKey = utils.getInputAsBool(
-    Inputs.SkipRestoreOnHitPrimaryKey
-);
+export const lookupOnly = utils.getInputAsBool(Inputs.LookupOnly);
 
 interface FailOn {
     keyType: "primary" | "first-match";
@@ -58,21 +56,7 @@ export const isMacos = process.env.RUNNER_OS === "macOS";
 
 export const nix = utils.getInputAsBool(Inputs.Nix) && (isLinux || isMacos);
 
-export const paths = (
-    nix
-        ? [
-              "/nix",
-              // # TODO research
-              // I'm not sure why these paths should be cached
-              // I only saw them here https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7
-              // Old caches can be invalid after restoring a cache
-              // if they rely on internal Nix store database information
-              // such as `id`s.
-              "~/.cache/nix",
-              "~root/.cache/nix"
-          ]
-        : []
-).concat(
+export const paths = (nix ? ["/nix"] : []).concat(
     (function () {
         const paths = utils.getInputAsArray(Inputs.Paths);
         const pathsPlatform = utils.getInputAsArray(
@@ -118,9 +102,11 @@ export const purgePrimaryKey = (function () {
 
 export const purgePrefixes = utils.getInputAsArray(Inputs.PurgePrefixes);
 
-export const purgeLastAccessed = utils.getInputAsInt(Inputs.PurgeLastAccessed);
+export const purgeLastAccessed = utils.getInputAsDuration(
+    Inputs.PurgeLastAccessed
+);
 
-export const purgeCreated = utils.getInputAsInt(Inputs.PurgeCreated);
+export const purgeCreated = utils.getInputAsDuration(Inputs.PurgeCreated);
 
 export const uploadChunkSize =
     utils.getInputAsInt(Inputs.UploadChunkSize) || 32 * 1024 * 1024;

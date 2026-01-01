@@ -4,7 +4,7 @@ import * as fs from "fs";
 import { Events, Inputs, State } from "./constants";
 import * as inputs from "./inputs";
 import {
-    type IStateProvider,
+    IStateProvider,
     NullStateProvider,
     StateProvider
 } from "./stateProvider";
@@ -13,6 +13,7 @@ import { cache } from "./utils/cacheBackend";
 import { collectGarbage } from "./utils/collectGarbage";
 import { purgeCacheByKey, purgeCaches } from "./utils/purge";
 import { TarCommandModifiers } from "actions/toolkit/packages/cache/src/options";
+import { Temporal } from "temporal-polyfill";
 
 // Catch and log any unhandled exceptions.  These exceptions can leak out of the uploadChunk method in
 // @actions/toolkit when a failed upload closes the file descriptor causing any in-process reads to
@@ -23,7 +24,7 @@ export async function saveImpl(
     stateProvider: IStateProvider
 ): Promise<number | void> {
     let cacheId = -1;
-    const time = Date.now();
+    const time = Temporal.Now.zonedDateTimeISO("UTC");
     try {
         if (!utils.isCacheFeatureAvailable()) {
             return;
@@ -35,6 +36,7 @@ export async function saveImpl(
                     process.env[Events.Key]
                 } is not supported because it's not tied to a branch or tag ref.`
             );
+            return;
         }
 
         // If restore has stored a primary key in state, reuse that
@@ -141,7 +143,7 @@ export async function saveImpl(
             });
         }
     } catch (error: unknown) {
-        core.setFailed((error as Error).message);
+        utils.logWarning((error as Error).message);
     }
     return cacheId;
 }

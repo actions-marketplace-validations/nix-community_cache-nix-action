@@ -11,7 +11,7 @@ export async function collectGarbage() {
 
     async function getStoreSize() {
         const { stdout } = await utils.run(
-            `nix path-info --json --all | jq 'map(.narSize) | add'`
+            `nix --experimental-features nix-command path-info --json --json-format 2 --all | jq '.info | map(.narSize) | add'`
         );
 
         const storeSize = (() => {
@@ -21,7 +21,7 @@ export async function collectGarbage() {
                 let sizeDummy = 1_000_000_000_000n;
                 utils.warning(
                     `
-                    Expected a number as the store size, but got: ${stdout}.
+                    Expected a number for the store size, but got: ${stdout}.
                     
                     Assuming the store has size: ${sizeDummy}.
                     `
@@ -59,7 +59,7 @@ export async function collectGarbage() {
 
         utils.info(`::group::Logs produced while collecting garbage.`);
 
-        await utils.run(`nix store gc --max ${maxBytesToFree}`, true);
+        await utils.run(`nix --experimental-features nix-command store gc --max ${maxBytesToFree}`, true);
 
         utils.info(`::endgroup::`);
 

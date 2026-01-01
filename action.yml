@@ -27,10 +27,11 @@ inputs:
       - Otherwise, this input has no effect.
     default: ""
 
-  skip-restore-on-hit-primary-key:
+  lookup-only:
     description: |
-      - When `true`, when there's a hit on the `primary-key`, the action doesn't restore the found cache.
-      - Otherwise, the action restores the cache.
+      - When `true`, when there's a hit on the `primary-key`, the action doesn't restore any cache.
+      - Otherwise, the action can restore caches.
+      - Doesn't change the behavior of cache saving in any case.
     default: "false"
 
   fail-on:
@@ -60,7 +61,7 @@ inputs:
 
   paths:
     description: |
-      - When `nix: true`, the action uses `["/nix", "~/.cache/nix", "~root/.cache/nix"]` as default paths, as suggested [here](https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7).
+      - When `nix: true`, the action uses `["/nix"]` as default paths.
       - Otherwise, the action uses an empty list as default paths.
       - When a newline-separated non-empty list of non-empty path patterns (see [`@actions/glob`](https://github.com/actions/toolkit/tree/main/packages/glob) for supported patterns), the action appends it to default paths and uses the resulting list for restoring and saving caches.
       - Otherwise, the action uses default paths for restoring and saving caches.
@@ -126,13 +127,15 @@ inputs:
   purge-last-accessed:
     description: |
       - Can have an effect only when `purge: true`.
-      - When a non-negative number, the action purges selected caches that were last accessed more than this number of seconds ago relative to the start of the `Post Restore` phase.
+      - When a non-negative number or a string in the [ISO 8601 duration format](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration#iso_8601_duration_format),
+        the action purges selected caches that were last accessed more than this number of seconds or this duration before the start of the `Post Restore` phase. Examples: `0` (0 seconds), `P1DT12H` (1 day and 12 hours).
       - Otherwise, this input has no effect.
     default: ""
   purge-created:
     description: |
       - Can have an effect only when `purge: true`.
-      - When a non-negative number, the action purges selected caches that were created more than this number of seconds ago relative to the start of the `Post Restore` phase.
+      - When a non-negative number or a string in the [ISO 8601 duration format](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration#iso_8601_duration_format),
+        the action purges selected caches that were created more than this number of seconds or this duration before the start of the `Post Restore` phase. Examples: `0` (0 seconds), `P1DT12H` (1 day and 12 hours).
       - Otherwise, this input has no effect.
     default: ""
 
@@ -184,7 +187,7 @@ outputs:
       - Keys of restored caches.
       - Example: `["key1", "key2"]`.
 runs:
-  using: "node20"
+  using: "node24"
   main: "dist/restore/index.js"
   post: "dist/save/index.js"
   post-if: "success()"

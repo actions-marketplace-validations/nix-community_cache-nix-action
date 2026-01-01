@@ -34,7 +34,7 @@ let
 
   q = txt: "`${txt}`";
   whenListOf = "When a newline-separated non-empty list of non-empty";
-  pathsDefault = ''`["/nix", "~/.cache/nix", "~root/.cache/nix"]`'';
+  pathsDefault = ''`["/nix"]`'';
   nixTrue = "nix: true";
 
   pathsWhen = ''${whenListOf} path patterns (see [`@actions/glob`](https://github.com/actions/toolkit/tree/main/packages/glob) for supported patterns), the action appends it to default paths and uses the resulting list for ${specific.actions} caches.'';
@@ -91,10 +91,12 @@ in
                 - ${noEffectOtherwise}
               default: ""
 
-            skip-restore-on-hit-primary-key:
+            lookup-only:
               description: |
-                - When `true`, when there's a hit on the ${q primary-key}, the action doesn't restore the found cache.
-                - Otherwise, the action restores the cache.
+                - When `true`, when there's a hit on the ${q primary-key}, the action doesn't restore any cache.
+                - Otherwise, the action can restore caches.${
+                  if target == cache then "\n      - Doesn't change the behavior of cache saving in any case." else ""
+                }
               default: "false"
 
             fail-on:
@@ -127,7 +129,7 @@ in
 
     ${paths}:
       description: |
-        - When ${q nixTrue}, the action uses ${pathsDefault} as default paths, as suggested [here](https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7).
+        - When ${q nixTrue}, the action uses ${pathsDefault} as default paths.
         - Otherwise, the action uses an empty list as default paths.
         - ${pathsWhen}
         - ${pathsOtherwise}
@@ -201,17 +203,19 @@ in
             purge-last-accessed:
               description: |
                 - ${effectOnlyWhen [ "purge: true" ]}
-                - When a non-negative number, the action purges selected caches that were last accessed more than this number of seconds ago relative to the start of the ${
+                - When a non-negative number or a string in the [ISO 8601 duration format](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration#iso_8601_duration_format),
+                  the action purges selected caches that were last accessed more than this number of seconds or this duration before the start of the ${
                   if target == cache then "`Post Restore` phase" else "Save step"
-                }.
+                }. Examples: `0` (0 seconds), `P1DT12H` (1 day and 12 hours).
                 - ${noEffectOtherwise}
               default: ""
             purge-created:
               description: |
                 - ${effectOnlyWhen [ "purge: true" ]}
-                - When a non-negative number, the action purges selected caches that were created more than this number of seconds ago relative to the start of the ${
+                - When a non-negative number or a string in the [ISO 8601 duration format](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration#iso_8601_duration_format),
+                  the action purges selected caches that were created more than this number of seconds or this duration before the start of the ${
                   if target == cache then "`Post Restore` phase" else "Save step"
-                }.
+                }. Examples: `0` (0 seconds), `P1DT12H` (1 day and 12 hours).
                 - ${noEffectOtherwise}
               default: ""
 
@@ -272,7 +276,7 @@ in
       ""
   }
   runs:
-    using: "node20"
+    using: "node24"
     main: "${specific.main}"
     ${specific.post}
   branding:

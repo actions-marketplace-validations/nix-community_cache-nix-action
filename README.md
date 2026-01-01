@@ -16,23 +16,32 @@ This action is based on [actions/cache](https://github.com/actions/cache).
 - Collect garbage in the Nix store before saving a new cache.
 - Merge caches produced by several jobs.
 - Purge caches created or last accessed at least the given time ago.
+- Redefine `ACTIONS_CACHE_URL` and `ACTIONS_RESULTS_URL` using `CUSTOM_ACTIONS_CACHE_URL` and `CUSTOM_ACTIONS_RESULTS_URL` environment variables.
+
+## Compatible Nix installers
+
+`cache-nix-action` is compatible with:
+
+- [`nixbuild/nix-quick-install-action`](https://github.com/nixbuild/nix-quick-install-action)
+- [`cachix/install-nix-action`](https://github.com/cachix/install-nix-action/)
+- [`DeterminateSystems/determinate-nix-action`](https://github.com/DeterminateSystems/determinate-nix-action)
 
 ## A typical job
 
 > [!NOTE]
-> Inputs are given for reference. All available inputs are specified [below](#inputs).
+> See all available action inputs in [Inputs](#inputs).
 
-1. The [nix-quick-install-action](https://github.com/nixbuild/nix-quick-install-action) installs Nix in single-user mode.
+> [!NOTE]
+> The action can't restore a cache when there's a mismatch in the [cache version](#cache-version), e.g., when `paths` used to create a cache differ from those specified in the current job run.
+
+1. One of the [compatible actions](#compatible-nix-installers) installs Nix.
 
 1. `Restore` phase:
+   1. The `cache-nix-action` tries to restore a cache whose key is the same as the specified one (input: `primary-key`).
 
-   > [!NOTE]
-   > For a cache to be restored in the current step, `paths` used to create that cache must be the same as the `paths` specified in the current step.
-   1. The `cache-nix-action` tries to restore a cache whose key is the same as the specified one (inputs: `primary-key`, `paths`).
+   1. When the `cache-nix-action` can't restore, it tries to restore a cache whose key matches a prefix in a given list of key prefixes (input: `restore-prefixes-first-match`).
 
-   1. When it can't restore, the `cache-nix-action` tries to restore a cache whose key matches a prefix in a given list of key prefixes (inputs: `restore-prefixes-first-match`, `paths`).
-
-   1. The `cache-nix-action` restores all caches whose keys match some of the prefixes in another given list of key prefixes (inputs: `restore-prefixes-all-matches`, `paths`).
+   1. The `cache-nix-action` restores all caches whose keys match some of the prefixes in another given list of key prefixes (input: `restore-prefixes-all-matches`).
 
 1. Other job steps run.
 
@@ -41,17 +50,19 @@ This action is based on [actions/cache](https://github.com/actions/cache).
 
    1. When there's no cache whose key is the same as the primary key, the `cache-nix-action` collects garbage in the Nix store and saves a new cache (inputs: `save`, `gc-max-store-size`, `gc-max-store-size-linux`, `gc-max-store-size-macos`).
 
-   1. The `cache-nix-action` purges caches whose keys match some of the given prefixes in a given list of key prefixes and that were created or last accessed more than a given time ago relative to the start of the `Post Restore` phase (`purge`, `purge-prefixes`, `purge-created`, `purge-last-accessed`, `purge-primary-key`).
+   1. The `cache-nix-action` purges caches whose keys match some of the given prefixes in a given list of key prefixes and that were created or last accessed more than a given time ago relative to the start of the `Post Restore` phase (inputs: `purge`, `purge-prefixes`, `purge-created`, `purge-last-accessed`, `purge-primary-key`).
 
 ## Limitations
 
-- Uses experimental [nix](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix) commands like [nix store gc](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix3-store-gc) and [nix path-info](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix3-path-info).
-- By default, the action caches and restores only `/nix`, `~/.cache/nix`, `~root/.cache/nix` (see [documentation](#inputs) for the `paths` input).
-  - The action doesn't automatically cache stores specified via the `--store` flag ([link](https://nixos.org/manual/nix/unstable/store/types/local-store.html#local-store)).
-  - When restoring a cache, the action doesn't extract from the cache the `/nix/store` paths that already exist on the runner.
-  - Additionally, the action unarchives only the `/nix/var/nix/db/db.sqlite` and skips other cached `/nix/var` directories.
+- Requires Nix 2.24+ and SQLite 3.37+ to be installed on the GitHub Actions runner.
+- Uses experimental [`nix`](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix) commands like [`nix store gc`](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-store-gc) and [`nix path-info`](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-path-info).
+- By default, the action caches and restores only `/nix` (see [documentation](#inputs) for the `paths` input).
+  - The action doesn't automatically cache stores specified via the `--store` flag ([link](https://nix.dev/manual/nix/2.33/store/types/local-store.html#local-store)).
+  - When restoring a cache, the action doesn't restore the `/nix/store` paths that already exist on the runner.
+  - Out of all files in `/nix/var`, the action restores only `/nix/var/nix/db/db.sqlite`.
+  - It then replaces that file with a new database file.
+  - The action removes existing `/nix/var/nix/db/db.sqlite-wal` and `/nix/var/nix/db/db.sqlite-shm` (see [WAL-mode File Format](https://sqlite.org/walformat.html)) because the new database file is incompatible with them and they're unnecessary (assumption).
   - The action merges existing and new databases when restoring a cache.
-- The action requires [nix-quick-install-action](https://github.com/nixbuild/nix-quick-install-action).
 - The action supports only `Linux` and `macOS` runners for Nix store caching.
 - The action purges caches scoped to the current [GITHUB_REF](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables).
 - The action purges caches by keys without considering cache versions (see [Cache version](#cache-version)).
@@ -120,14 +131,14 @@ See [Caching Approaches](#caching-approaches).
     purge-prefixes: nix-${{ runner.os }}-
     # created more than this number of seconds ago
     purge-created: 0
-    # or, last accessed more than this number of seconds ago
-    # relative to the start of the `Post Restore and save Nix store` phase
-    purge-last-accessed: 0
+    # or last accessed this duration (ISO 8601 duration format)
+    # before the start of the `Post Restore and save Nix store` phase
+    purge-last-accessed: P1DT12H
     # except any version with the key that is the same as the `primary-key`
     purge-primary-key: never
 ```
 
-- `nix-quick-install-action` writes the supplied [nix_conf](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/action.yml#L19) to [nix.conf](https://nixos.org/manual/nix/unstable/command-ref/conf-file.html) (see [action.yml](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/action.yml#L63), [script](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/nix-quick-install.sh#L99)).
+- `nix-quick-install-action` writes the supplied [nix_conf](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/action.yml#L19) to [nix.conf](https://nix.dev/manual/nix/2.33/command-ref/conf-file.html) (see [action.yml](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/action.yml#L63), [script](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/nix-quick-install.sh#L99)).
 - `nix-quick-install-action` enables [flakes](https://nixos.wiki/wiki/Flakes) and accepts `nixConfig` from `flake.nix` (see [script](https://github.com/nixbuild/nix-quick-install-action/blob/8505cd40ae3d4791ca658f2697c5767212e5ce71/nix-quick-install.sh#L113)).
 - Due to `gc-max-store-size-linux: 1G`, on `Linux` runners, garbage in the Nix store is collected until the store size reaches `1GB` or until there's no garbage to collect.
 - Since `gc-max-store-size-macos` isn't set to a number, on `macOS` runners, no garbage is collected in the Nix store.
@@ -159,29 +170,29 @@ See [action.yml](action.yml).
 
 ### Inputs
 
-| name                              | description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | required | default               |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------- |
-| `primary-key`                     | <ul> <li>When a non-empty string, the action uses this key for restoring and saving a cache.</li> <li>Otherwise, the action fails.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `true`   | `""`                  |
-| `restore-prefixes-first-match`    | <ul> <li>When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the <code>primary-key</code>, the action searches in this list for the first prefix for which there exists a cache whose key has this prefix, and the action tries to restore that cache.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `false`  | `""`                  |
-| `restore-prefixes-all-matches`    | <ul> <li>When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the <code>primary-key</code>, the action tries to restore all caches whose keys have these prefixes.</li> <li>Tries caches across all refs to make use of caches created on the current, base, and default branches (see <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache">docs</a>).</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                           | `false`  | `""`                  |
-| `skip-restore-on-hit-primary-key` | <ul> <li>When <code>true</code>, when there's a hit on the <code>primary-key</code>, the action doesn't restore the found cache.</li> <li>Otherwise, the action restores the cache.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `false`  | `false`               |
-| `fail-on`                         | <ul> <li>Input form: <code>&lt;key type&gt;.&lt;result&gt;</code>.</li> <li><code>&lt;key type&gt;</code> options: <code>primary-key</code>, <code>first-match</code>.</li> <li><code>&lt;result&gt;</code> options: <code>miss</code>, <code>not-restored</code>.</li> <li>When the input satisfies the input form, when the event described in the input happens, the action fails.</li> <li>Example:<ul> <li>Input: <code>primary-key.not-restored</code>.</li> <li>Event: a cache could not be restored via the <code>primary-key</code>.</li></ul></li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                     | `false`  | `""`                  |
-| `nix`                             | <ul> <li>Can have an effect only when the action runs on a <code>Linux</code> or a <code>macOS</code> runner.</li> <li>When <code>true</code>, the action can do Nix-specific things.</li> <li>Otherwise, the action doesn't do them.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `false`  | `true`                |
-| `save`                            | <ul> <li>When <code>true</code>, the action can save a cache with the <code>primary-key</code>.</li> <li>Otherwise, the action can't save a cache.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `false`  | `true`                |
-| `paths`                           | <ul> <li>When <code>nix: true</code>, the action uses <code>["/nix", "~/.cache/nix", "~root/.cache/nix"]</code> as default paths, as suggested <a href="https://github.com/divnix/nix-cache-action/blob/b14ec98ae694c754f57f8619ea21b6ab44ccf6e7/action.yml#L7">here</a>.</li> <li>Otherwise, the action uses an empty list as default paths.</li> <li>When a newline-separated non-empty list of non-empty path patterns (see <a href="https://github.com/actions/toolkit/tree/main/packages/glob"><code>@actions/glob</code></a> for supported patterns), the action appends it to default paths and uses the resulting list for restoring and saving caches.</li> <li>Otherwise, the action uses default paths for restoring and saving caches.</li> </ul>                                                                                                        | `false`  | `""`                  |
-| `paths-macos`                     | <ul> <li>Overrides <code>paths</code>.</li> <li>Can have an effect only when the action runs on a <code>macOS</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `false`  | `""`                  |
-| `paths-linux`                     | <ul> <li>Overrides <code>paths</code>.</li> <li>Can have an effect only when the action runs on a <code>Linux</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `false`  | `""`                  |
-| `backend`                         | <p>Choose an implementation of the <code>cache</code> package.</p> <ul> <li>When <code>actions</code>, use the <a href="https://github.com/actions/toolkit/tree/main/packages/cache">actions version</a> from <a href="https://github.com/nix-community/cache-nix-action/tree/actions-toolkit/packages/cache">here</a>.</li> <li>When <code>buildjet</code>, use the <a href="https://github.com/BuildJet/toolkit/tree/main/packages/cache-buildjet">BuildJet version</a> from <a href="https://github.com/nix-community/cache-nix-action/tree/buildjet-toolkit/packages/cache">here</a>.</li> </ul>                                                                                                                                                                                                                                                                 | `false`  | `actions`             |
-| `gc-max-store-size`               | <ul> <li>Can have an effect only when <code>nix: true</code>, <code>save: true</code>.</li> <li>The input has no effect if "primary-key" hit occurs when starting to save the new cache.</li> <li>When a non-negative integer number (possibly with a suffix), the action collects garbage (via <code>nix store gc --max ...</code>) until the Nix store size (in bytes) is at most this number just before the action tries to save a new cache.</li> <li>If you specify a suffix, it must be <code>K</code> (kibibytes, 2 ^ 10 bytes), <code>M</code> (mebibytes, 2 ^ 20 bytes) or <code>G</code> (gibibytes, 2 ^ 30 bytes), where <code>2 ^ N</code> means <code>2 to the power N</code>. Examples: <code>5G</code> (same as <code>5368709120</code>), <code>20M</code> (same as <code>20971520</code>).</li> <li>Otherwise, this input has no effect.</li> </ul> | `false`  | `""`                  |
-| `gc-max-store-size-macos`         | <ul> <li>Overrides <code>gc-max-store-size</code>.</li> <li>Can have an effect only when the action runs on a <code>macOS</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `false`  | `""`                  |
-| `gc-max-store-size-linux`         | <ul> <li>Overrides <code>gc-max-store-size</code>.</li> <li>Can have an effect only when the action runs on a <code>Linux</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `false`  | `""`                  |
-| `purge`                           | <ul> <li>When <code>true</code>, the action purges (possibly zero) caches.</li> <li>The action purges only caches scoped to the current <a href="https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables">GITHUB_REF</a>.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `false`  | `false`               |
-| `purge-primary-key`               | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When <code>always</code>, the action always purges the cache with the <code>primary-key</code>.</li> <li>When <code>never</code>, the action never purges the cache with the <code>primary-key</code>.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `false`  | `""`                  |
-| `purge-prefixes`                  | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When a newline-separated non-empty list of non-empty cache key prefixes, the action selects for purging all caches whose keys match some of these prefixes.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `false`  | `""`                  |
-| `purge-last-accessed`             | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When a non-negative number, the action purges selected caches that were last accessed more than this number of seconds ago relative to the start of the <code>Post Restore</code> phase.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `false`  | `""`                  |
-| `purge-created`                   | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When a non-negative number, the action purges selected caches that were created more than this number of seconds ago relative to the start of the <code>Post Restore</code> phase.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `false`  | `""`                  |
-| `upload-chunk-size`               | <ul> <li>When a non-negative number, the action uses it as the chunk size (in bytes) to split up large files during upload.</li> <li>Otherwise, the action uses the default value <code>33554432</code> (32MB).</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `false`  | `""`                  |
-| `token`                           | <ul> <li>The action uses it to communicate with GitHub API.</li> <li>If you use a personal access token, it must have the <code>repo</code> scope (<a href="https://docs.github.com/en/rest/actions/cache?apiVersion=2022-11-28#delete-github-actions-caches-for-a-repository-using-a-cache-key">link</a>).</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `false`  | `${{ github.token }}` |
+| name                           | description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | required | default               |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------- |
+| `primary-key`                  | <ul> <li>When a non-empty string, the action uses this key for restoring and saving a cache.</li> <li>Otherwise, the action fails.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `true`   | `""`                  |
+| `restore-prefixes-first-match` | <ul> <li>When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the <code>primary-key</code>, the action searches in this list for the first prefix for which there exists a cache whose key has this prefix, and the action tries to restore that cache.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `false`  | `""`                  |
+| `restore-prefixes-all-matches` | <ul> <li>When a newline-separated non-empty list of non-empty key prefixes, when there's a miss on the <code>primary-key</code>, the action tries to restore all caches whose keys have these prefixes.</li> <li>Tries caches across all refs to make use of caches created on the current, base, and default branches (see <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache">docs</a>).</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                           | `false`  | `""`                  |
+| `lookup-only`                  | <ul> <li>When <code>true</code>, when there's a hit on the <code>primary-key</code>, the action doesn't restore any cache.</li> <li>Otherwise, the action can restore caches.</li> <li>Doesn't change the behavior of cache saving in any case.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `false`  | `false`               |
+| `fail-on`                      | <ul> <li>Input form: <code>&lt;key type&gt;.&lt;result&gt;</code>.</li> <li><code>&lt;key type&gt;</code> options: <code>primary-key</code>, <code>first-match</code>.</li> <li><code>&lt;result&gt;</code> options: <code>miss</code>, <code>not-restored</code>.</li> <li>When the input satisfies the input form, when the event described in the input happens, the action fails.</li> <li>Example:<ul> <li>Input: <code>primary-key.not-restored</code>.</li> <li>Event: a cache could not be restored via the <code>primary-key</code>.</li></ul></li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                     | `false`  | `""`                  |
+| `nix`                          | <ul> <li>Can have an effect only when the action runs on a <code>Linux</code> or a <code>macOS</code> runner.</li> <li>When <code>true</code>, the action can do Nix-specific things.</li> <li>Otherwise, the action doesn't do them.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `false`  | `true`                |
+| `save`                         | <ul> <li>When <code>true</code>, the action can save a cache with the <code>primary-key</code>.</li> <li>Otherwise, the action can't save a cache.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `false`  | `true`                |
+| `paths`                        | <ul> <li>When <code>nix: true</code>, the action uses <code>["/nix"]</code> as default paths.</li> <li>Otherwise, the action uses an empty list as default paths.</li> <li>When a newline-separated non-empty list of non-empty path patterns (see <a href="https://github.com/actions/toolkit/tree/main/packages/glob"><code>@actions/glob</code></a> for supported patterns), the action appends it to default paths and uses the resulting list for restoring and saving caches.</li> <li>Otherwise, the action uses default paths for restoring and saving caches.</li> </ul>                                                                                                                                                                                                                                                                                    | `false`  | `""`                  |
+| `paths-macos`                  | <ul> <li>Overrides <code>paths</code>.</li> <li>Can have an effect only when the action runs on a <code>macOS</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `false`  | `""`                  |
+| `paths-linux`                  | <ul> <li>Overrides <code>paths</code>.</li> <li>Can have an effect only when the action runs on a <code>Linux</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `false`  | `""`                  |
+| `backend`                      | <p>Choose an implementation of the <code>cache</code> package.</p> <ul> <li>When <code>actions</code>, use the <a href="https://github.com/actions/toolkit/tree/main/packages/cache">actions version</a> from <a href="https://github.com/nix-community/cache-nix-action/tree/actions-toolkit/packages/cache">here</a>.</li> <li>When <code>buildjet</code>, use the <a href="https://github.com/BuildJet/toolkit/tree/main/packages/cache-buildjet">BuildJet version</a> from <a href="https://github.com/nix-community/cache-nix-action/tree/buildjet-toolkit/packages/cache">here</a>.</li> </ul>                                                                                                                                                                                                                                                                 | `false`  | `actions`             |
+| `gc-max-store-size`            | <ul> <li>Can have an effect only when <code>nix: true</code>, <code>save: true</code>.</li> <li>The input has no effect if "primary-key" hit occurs when starting to save the new cache.</li> <li>When a non-negative integer number (possibly with a suffix), the action collects garbage (via <code>nix store gc --max ...</code>) until the Nix store size (in bytes) is at most this number just before the action tries to save a new cache.</li> <li>If you specify a suffix, it must be <code>K</code> (kibibytes, 2 ^ 10 bytes), <code>M</code> (mebibytes, 2 ^ 20 bytes) or <code>G</code> (gibibytes, 2 ^ 30 bytes), where <code>2 ^ N</code> means <code>2 to the power N</code>. Examples: <code>5G</code> (same as <code>5368709120</code>), <code>20M</code> (same as <code>20971520</code>).</li> <li>Otherwise, this input has no effect.</li> </ul> | `false`  | `""`                  |
+| `gc-max-store-size-macos`      | <ul> <li>Overrides <code>gc-max-store-size</code>.</li> <li>Can have an effect only when the action runs on a <code>macOS</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `false`  | `""`                  |
+| `gc-max-store-size-linux`      | <ul> <li>Overrides <code>gc-max-store-size</code>.</li> <li>Can have an effect only when the action runs on a <code>Linux</code> runner.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `false`  | `""`                  |
+| `purge`                        | <ul> <li>When <code>true</code>, the action purges (possibly zero) caches.</li> <li>The action purges only caches scoped to the current <a href="https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables">GITHUB_REF</a>.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `false`  | `false`               |
+| `purge-primary-key`            | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When <code>always</code>, the action always purges the cache with the <code>primary-key</code>.</li> <li>When <code>never</code>, the action never purges the cache with the <code>primary-key</code>.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `false`  | `""`                  |
+| `purge-prefixes`               | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When a newline-separated non-empty list of non-empty cache key prefixes, the action selects for purging all caches whose keys match some of these prefixes.</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `false`  | `""`                  |
+| `purge-last-accessed`          | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When a non-negative number or a string in the <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration#iso_8601_duration_format">ISO 8601 duration format</a>, the action purges selected caches that were last accessed more than this number of seconds or this duration before the start of the <code>Post Restore</code> phase. Examples: <code>0</code> (0 seconds), <code>P1DT12H</code> (1 day and 12 hours).</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                            | `false`  | `""`                  |
+| `purge-created`                | <ul> <li>Can have an effect only when <code>purge: true</code>.</li> <li>When a non-negative number or a string in the <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration#iso_8601_duration_format">ISO 8601 duration format</a>, the action purges selected caches that were created more than this number of seconds or this duration before the start of the <code>Post Restore</code> phase. Examples: <code>0</code> (0 seconds), <code>P1DT12H</code> (1 day and 12 hours).</li> <li>Otherwise, this input has no effect.</li> </ul>                                                                                                                                                                                                                                                                  | `false`  | `""`                  |
+| `upload-chunk-size`            | <ul> <li>When a non-negative number, the action uses it as the chunk size (in bytes) to split up large files during upload.</li> <li>Otherwise, the action uses the default value <code>33554432</code> (32MB).</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `false`  | `""`                  |
+| `token`                        | <ul> <li>The action uses it to communicate with GitHub API.</li> <li>If you use a personal access token, it must have the <code>repo</code> scope (<a href="https://docs.github.com/en/rest/actions/cache?apiVersion=2022-11-28#delete-github-actions-caches-for-a-repository-using-a-cache-key">link</a>).</li> </ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `false`  | `${{ github.token }}` |
 
 <!-- action-docs-inputs action="action.yml" -->
 
@@ -259,6 +270,7 @@ Disadvantages:
 
 ### Garbage collection tools
 
+- GC by access time tracked in the Nix store DB: [PR](https://github.com/NixOS/nix/pull/14725).
 - GC by `atime`: [nix-heuristic-gc](https://github.com/risicle/nix-heuristic-gc).
 - GC via gc roots: [nix-cache-cut](https://github.com/astro/nix-cache-cut).
 - GC based on time: [cache-gc](https://github.com/lheckemann/cache-gc).
@@ -266,17 +278,27 @@ Disadvantages:
 
 ## Save Nix store paths from garbage collection
 
+### Problems
+
+One problem is that garbage collection doesn't differentiate between the least and the most recently used paths ([issue](https://github.com/NixOS/nix/issues/2793)).
+
+Another problem is that derivations produced with the help of flake inputs don't retain references to these inputs ([issue](https://github.com/NixOS/nix/issues/4250), [issue](https://github.com/NixOS/nix/issues/6895)).
+
+### Solution 1 - `saveFromGC`
+
+The Nix function is defined in [`./saveFromGC.nix`](./saveFromGC.nix).
+
 > [!WARNING]
-> We don't guarantee that [`saveFromGC.nix`](./saveFromGC.nix) will be available or won't have breaking changes in future.
+> We don't guarantee that [`./saveFromGC.nix`](./saveFromGC.nix) will be available or won't have breaking changes in future.
 
-### Issues
+Write an expression for a derivation that mentions the necessary paths and flake inputs. Next, [add it to a profile or build it](#solution-2---nix-profile-add-or-nix-build).
 
-- [issue](https://github.com/NixOS/nix/issues/4250)
-- [issue](https://github.com/NixOS/nix/issues/6895)
+- **Pros**: Allows to include and exclude flake inputs in Nix expressions.
+- **Cons**: Requires writing Nix expressions and running extra commands.
 
-### Sample flake
+#### `saveFromGC` example
 
-See [examples/saveFromGC/flake.nix](./examples/saveFromGC/flake.nix) and [saveFromGC.nix](./saveFromGC.nix).
+Example or a flake with `saveFromGC` (from [`./examples/saveFromGC/flake.nix`](./examples/saveFromGC/flake.nix)):
 
 <!-- `$ cat flake.nix` as nix -->
 
@@ -304,22 +326,21 @@ See [examples/saveFromGC/flake.nix](./examples/saveFromGC/flake.nix) and [saveFr
         packages = {
           hello = pkgs.hello;
 
-          inherit
+          saveFromGC =
             (import "${inputs.cache-nix-action}/saveFromGC.nix" {
               inherit pkgs inputs;
-              inputsExclude = [
-                # the systems input will still be saved
-                # because flake-utils needs it
-                inputs.systems
+              # The `cache-nix-action` input won't be saved.
+              inputsInclude = [
+                "nixpkgs"
+                "flake-utils"
+                "systems"
               ];
               derivations = [
                 packages.hello
                 devShells.default
               ];
               paths = [ "${packages.hello}/bin/hello" ];
-            })
-            saveFromGC
-            ;
+            }).package;
         };
 
         devShells.default = pkgs.mkShell { buildInputs = [ pkgs.gcc ]; };
@@ -331,16 +352,39 @@ See [examples/saveFromGC/flake.nix](./examples/saveFromGC/flake.nix) and [saveFr
 }
 ```
 
-### `nix profile install` or `nix build`
+Example of GitHub Actions steps:
 
-Each profile [is](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix3-profile#filesystem-layout) a [garbage collection root](https://nix.dev/manual/nix/2.25/package-management/garbage-collector-roots.html#garbage-collector-roots).
+```yaml
+# ... Install Nix
+#
+# ... Restore cache
 
-Each [`nix build`](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix3-build) result symlink [is](https://nixos.org/guides/nix-pills/11-garbage-collector.html#indirect-roots) a garbage collection root.
+- name: Run gcc
+  run: nix develop -c 'gcc --version'
 
-To save particular Nix store paths, create an [installable](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix#installables) that contains these paths and
+- name: Run hello
+  run: nix run .#hello -- --version
 
-- add it to a profile via [`nix profile install`](https://nix.dev/manual/nix/2.25/command-ref/new-cli/nix3-profile-install.html) or
-- `nix build` it
+- name: Save packages from garbage collection
+  run: nix profile add .#saveFromGC
+# ... Collect garbage and save cache
+```
+
+### Solution 2 - `nix profile add` or `nix build`
+
+Each profile [is](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-profile#filesystem-layout) a [garbage collection root](https://nix.dev/manual/nix/2.33/package-management/garbage-collector-roots.html#garbage-collector-roots).
+
+Each [`nix build`](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-build) result symlink [is](https://nixos.org/guides/nix-pills/11-garbage-collector.html#indirect-roots) a garbage collection root.
+
+To save particular Nix store paths, create an [installable](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix#installables) that contains these paths and
+
+- either add it to a profile via [`nix profile add`](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-profile-add.html)
+- or `nix build`
+
+- **Pros**: Easy to use in CI.
+- **Cons**: These commands save only output paths. Use the [solution 1](#solution-1---savefromgc) or [solution 3](#solution-3---nix-flake-archive) to save flake inputs.
+
+#### Example with `saveFromGC`
 
 The `saveFromGC` attribute of the flake above is a script (an installable) that contains paths of elements of the flake closure (the flake itself, flake inputs, inputs of these inputs, etc.).
 
@@ -353,34 +397,43 @@ cd examples/saveFromGC
 Print the contents of `saveFromGC`.
 
 ```$ as console
-cat $(nix build .#saveFromGC --no-link --print-out-paths)/bin/save-from-gc
+cat $(nix build .#saveFromGC --no-link --print-out-paths)
 ```
 
 ```console
-closure
-/nix/store/pj0rhk7zkfx82xsighf72v8x4rqldzgi-source
-/nix/store/01x5k4nlxcpyd85nnr0b9gm89rm8ff4x-source
-/nix/store/f3phg71mppsdj69cb63xllf1nnigzr2s-source
-/nix/store/yj1wxm9hh8610iyzqnz75kvs6xl8j3my-source
+# derivations:
 
-derivations
-/nix/store/2bcv91i8fahqghn8dmyr791iaycbsjdd-hello-2.12.2
-/nix/store/vb1fjr733z2hmwf3kfh72ja8wny59ssr-nix-shell
+- /nix/store/jrq3p609i85jsg27mr5zxm2imk3mjzyk-hello-2.12.2
+- /nix/store/8xjhphvn58rrqydsx5569jn01yd5a0al-nix-shell
 
-paths
-/nix/store/2bcv91i8fahqghn8dmyr791iaycbsjdd-hello-2.12.2/bin/hello
+# derivationsAttrs:
+
+
+
+# inputs:
+
+- "flake-utils": /nix/store/01x5k4nlxcpyd85nnr0b9gm89rm8ff4x-source
+- "nixpkgs": /nix/store/f3phg71mppsdj69cb63xllf1nnigzr2s-source
+- "systems": /nix/store/yj1wxm9hh8610iyzqnz75kvs6xl8j3my-source
+
+# paths:
+
+- /nix/store/jrq3p609i85jsg27mr5zxm2imk3mjzyk-hello-2.12.2/bin/hello
+
+# pathsAttrs:
+
 ```
 
 Add the installable to the default profile.
 
 ```$ as console
 nix profile remove examples/saveFromGC
-nix profile install .#saveFromGC
+nix profile add .#saveFromGC
 nix profile list | grep save-from-gc
 ```
 
 ```console
-Store paths:        /nix/store/mrp80d8sp6dzzhw4s8xm6gq4zz4cdz6d-save-from-gc
+Store paths:        /nix/store/6ypnwndqz9r8cxwywib0cysnbafzmp6f-save-from-gc
 ```
 
 Or, build the installable and see the garbage collection roots that won't let it be garbage collected.
@@ -400,14 +453,26 @@ Output (edited):
 ```console
 ...
 <...>/.local/state/nix/profiles/profile-1-link -> /nix/store/pyvyymji6pvgify5gvnlvprlrxi42pdd-profile
-<...>/cache-nix-action/examples/saveFromGC/result -> /nix/store/mrp80d8sp6dzzhw4s8xm6gq4zz4cdz6d-save-from-gc
+<...>/cache-nix-action/examples/saveFromGC/result -> /nix/store/6ypnwndqz9r8cxwywib0cysnbafzmp6f-save-from-gc
 ```
 
 <!-- `$ nix profile remove examples/saveFromGC; rm result` -->
 
-### Other approaches
+### Solution 3 - `nix flake archive`
 
-- Run [direnv](https://github.com/nix-community/nix-direnv) in background.
+[Implementation](https://github.com/NixOS/nix/issues/4250#issuecomment-1146878407).
+
+- **Pros**: Can be run without adding any Nix code.
+- **Cons**:
+  - Requires custom bash code to exclude particular flake inputs if you decide not to save some of them.
+  - Saves only flake inputs. To save output paths, use the [solution 1](#solution-1---savefromgc) together with the [solution 2](#solution-2---nix-profile-add-or-nix-build).
+
+### Solution 4 - `direnv`
+
+Run [`direnv`](https://direnv.net/) with [`nix-direnv`](https://github.com/nix-community/nix-direnv) in background.
+
+- **Pros**: Can save both output paths and inputs.
+- **Cons**: Like the [solution 3](#solution-3---nix-flake-archive), requires writing some code to exclude particular paths.
 
 ## Caching approaches
 
@@ -418,10 +483,14 @@ These distances affect the restore and save speed.
 
 ### GitHub Actions
 
-- [DeterminateSystems/magic-nix-cache-action](https://github.com/DeterminateSystems/magic-nix-cache-action)
-- [nix-community/cache-nix-action](https://github.com/nix-community/cache-nix-action)
+- [`nix-community/cache-nix-action`](#nix-communitycache-nix-action)
+- [`DeterminateSystems/magic-nix-cache-action`](#determinatesystemsmagic-nix-cache-action)
+- [`actions/cache`](#actionscache)
+- [`rikhuijzer/cache-install`](#rikhuijzercache-install)
 
-#### cache-nix-action
+#### `nix-community/cache-nix-action`
+
+[Link](https://github.com/nix-community/cache-nix-action)
 
 **Pros**:
 
@@ -437,9 +506,11 @@ These distances affect the restore and save speed.
 
 **Cons**: see [Limitations](#limitations)
 
-#### magic-nix-cache-action
+#### `DeterminateSystems/magic-nix-cache-action`
 
-**Pros** ([link](https://github.com/DeterminateSystems/magic-nix-cache#why-use-the-magic-nix-cache)):
+[Link](https://github.com/DeterminateSystems/magic-nix-cache-action)
+
+**Pros** ([source](https://github.com/DeterminateSystems/magic-nix-cache#why-use-the-magic-nix-cache)):
 
 - Free.
 - Easy to set up.
@@ -454,50 +525,56 @@ These distances affect the restore and save speed.
   - Caches are isolated between branches ([link](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache)).
 - Saves a cache for each path in a store and quickly litters `Caches`.
 
-#### FlakeHub Cache
+#### `actions/cache`
 
-**Pros** ([link](https://flakehub.com/cache)):
+[Link](https://github.com/actions/cache)
 
-- Free for one month with a coupon code ([link](https://determinate.systems/posts/magic-nix-cache-free-tier-eol/)).
-- Easy to set up.
+If the action is used with [`nixbuild/nix-quick-install-action`](https://github.com/nixbuild/nix-quick-install-action), it's similar to the [`nix-community/cache-nix-action`](#nix-communitycache-nix-action).
 
-**Cons**:
-
-- Not free ([link](https://flakehub.com/cache))
-
-#### actions/cache
-
-If used with [nix-quick-install-action](https://github.com/nixbuild/nix-quick-install-action), it's similar to the [cache-nix-action](#cache-nix-action).
-
-If used with [install-nix-action](https://github.com/cachix/install-nix-action) and a [chroot local store](https://nixos.org/manual/nix/unstable/command-ref/new-cli/nix3-help-stores.html#local-store):
+If used with [`cachix/install-nix-action`](https://github.com/cachix/install-nix-action) and a [chroot local store](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-help-stores.html#local-store):
 
 **Pros**:
 
-- Quick restore and save `/tmp/nix`.
+- Quickly restores and saves `/tmp/nix`.
+- `chroot` store works only on Linux.
 
 **Cons**:
 
-- Slow [nix copy](https://nixos.org/manual/nix/unstable/command-ref/new-cli/nix3-copy.html) from `/tmp/nix` to `/nix/store`.
+- Slow [`nix copy`](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-copy.html) from `/tmp/nix` to `/nix/store`.
 
-If used with [install-nix-action](https://github.com/cachix/install-nix-action) and this [trick](https://github.com/cachix/install-nix-action/issues/56#issuecomment-1030697681), it's similar to the [cache-nix-action](#cache-nix-action), but slower ([link](https://github.com/ryantm/nix-installer-action-benchmark)).
+If used with [`cachix/install-nix-action`](https://github.com/cachix/install-nix-action) and this [trick](https://github.com/cachix/install-nix-action/issues/56#issuecomment-1030697681), it's similar to the [`nix-community/cache-nix-action`](#nix-communitycache-nix-action) but slower ([link](https://github.com/ryantm/nix-installer-action-benchmark)).
+
+#### `rikhuijzer/cache-install`
+
+**Pros**:
+
+- Quickly restores and saves `/nix/store`, some `/nix/var` files, and profiles ([link](https://github.com/rikhuijzer/cache-install/blob/f7a5251fe0711d671111afdf303db5b5aad8afbd/action.yml#L47-L53)).
+
+**Cons**:
+
+- Coupled with the installer ([link](https://github.com/rikhuijzer/cache-install/blob/f7a5251fe0711d671111afdf303db5b5aad8afbd/src/core.sh#L5)).
 
 ### Hosted binary caches
 
-See [binary cache](https://nixos.org/manual/nix/unstable/glossary.html#gloss-binary-cache), [HTTP Binary Cache Store](https://nixos.org/manual/nix/unstable/command-ref/new-cli/nix3-help-stores.html#http-binary-cache-store).
+See [binary cache](https://nix.dev/manual/nix/2.33/glossary.html#gloss-binary-cache), [HTTP Binary Cache Store](https://nix.dev/manual/nix/2.33/command-ref/new-cli/nix3-help-stores.html#http-binary-cache-store).
 
-- [cachix](https://www.cachix.org/)
-- [attic](https://github.com/zhaofengli/attic)
+- [`Cachix`](https://www.cachix.org/)
+- [`Attic`](https://github.com/zhaofengli/attic)
+- [`FlakeHub Cache`](https://flakehub.com/cache)
 
 **Pros**:
 
 - Restore and save paths selectively.
-- Provide least recently used garbage collection strategies ([cachix](https://docs.cachix.org/garbage-collection?highlight=garbage), [attic](https://github.com/zhaofengli/attic#goals)).
-- Don't cache paths available from the NixOS cache ([cachix](https://docs.cachix.org/garbage-collection?highlight=upstream)).
-- Allow to share paths between projects ([cachix](https://docs.cachix.org/getting-started#using-binaries-with-nix)).
+- Have free tier ([`Cachix`](https://www.cachix.org/pricing), Attic is [FOSS](https://github.com/zhaofengli/attic)).
+- Provide least recently used garbage collection strategies ([`Cachix`](https://docs.cachix.org/garbage-collection?highlight=garbage), [`Attic`](https://github.com/zhaofengli/attic#goals)).
+- Don't cache paths available from the NixOS cache ([`Cachix`](https://docs.cachix.org/garbage-collection?highlight=upstream)).
+- Allow to share paths between projects ([`Cachix`](https://docs.cachix.org/getting-started#using-binaries-with-nix), [`FlakeHub Cache`](https://docs.determinate.systems/flakehub/cache/#pulling-from-the-cache)).
 
 **Cons**:
 
-- Have limited free storage ([cachix](https://www.cachix.org/pricing) gives 5GB for open-source projects).
+- `Cachix` gives only 5GB for open-source projects ([src](https://www.cachix.org/pricing)).
+- `FlakeHub Cache` is available only to paid accounts ([src](https://docs.determinate.systems/flakehub/cache/)).
+- `Attic` needs to be hosted.
 - Need good bandwidth for receiving and pushing paths over the Internet.
 - Can be down.
 

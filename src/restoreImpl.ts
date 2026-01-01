@@ -15,8 +15,17 @@ export async function restoreImpl(
     stateProvider: IStateProvider,
     earlyExit?: boolean | undefined
 ): Promise<string | undefined> {
+    function setOutputsEarlyReturn() {
+        core.setOutput(Outputs.Hit, "false");
+        core.setOutput(Outputs.HitFirstMatch, "false");
+        core.setOutput(Outputs.HitPrimaryKey, "false");
+        core.setOutput(Outputs.RestoredKey, undefined);
+        core.setOutput(Outputs.RestoredKeys, undefined);
+    }
+
     try {
         if (!utils.isCacheFeatureAvailable()) {
+            setOutputsEarlyReturn();
             return;
         }
 
@@ -27,9 +36,9 @@ export async function restoreImpl(
                     process.env[Events.Key]
                 } is not supported because it's not tied to a branch or tag ref.`
             );
+            setOutputsEarlyReturn();
+            return;
         }
-
-        await install.installSQLite3();
 
         let restoredKey: string | undefined;
         let lookedUpPrimaryKey: string | undefined;
@@ -76,7 +85,7 @@ export async function restoreImpl(
                 );
                 hitPrimaryKey = true;
 
-                if (!inputs.skipRestoreOnHitPrimaryKey) {
+                if (!inputs.lookupOnly) {
                     restoredKey = await restore.restoreCache(primaryKey);
                     if (restoredKey) {
                         restoredKeys.push(...[restoredKey]);
@@ -94,8 +103,8 @@ export async function restoreImpl(
 
         if (
             inputs.restorePrefixesFirstMatch.length > 0 &&
-            // We may have got an unexpected primary key match by prefix.
-            !hitPrimaryKey
+            !hitPrimaryKey &&
+            !inputs.lookupOnly
         ) {
             utils.info(
                 `
@@ -140,7 +149,7 @@ export async function restoreImpl(
             }
         }
 
-        if (!lookedUpPrimaryKey) {
+        if (!hitPrimaryKey && !inputs.lookupOnly) {
             restoredKeys.push(...(await restore.restoreAllMatches()));
         }
 
@@ -157,7 +166,10 @@ export async function restoreImpl(
 
         return restoredKey;
     } catch (error: unknown) {
+        setOutputsEarlyReturn();
+
         core.setFailed((error as Error).message);
+
         if (earlyExit) {
             process.exit(1);
         }
