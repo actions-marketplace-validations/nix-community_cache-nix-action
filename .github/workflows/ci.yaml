@@ -37,7 +37,7 @@ jobs:
       contents: write
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.1
         with:
           submodules: true
 
@@ -120,7 +120,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Rebase
         run: |
@@ -199,7 +199,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Rebase
         run: |
@@ -280,7 +280,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Rebase
         run: |
@@ -351,7 +351,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Rebase
         run: |
@@ -468,7 +468,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Rebase
         run: |
@@ -539,7 +539,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Rebase
         run: |
