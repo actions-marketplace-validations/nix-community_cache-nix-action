@@ -28,7 +28,7 @@ jobs:
       actions: write
     if: github.event_name != 'pull_request' || github.repository == github.event.pull_request.head.repo.full_name
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
         with:
           submodules: true
           ref: ${{ github.head_ref }}
@@ -112,7 +112,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.head_ref }}
 
@@ -187,7 +187,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.head_ref }}
 
@@ -264,7 +264,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.head_ref }}
 
@@ -333,7 +333,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.head_ref }}
 
@@ -446,7 +446,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.head_ref }}
 
@@ -511,7 +511,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.head_ref }}
 
